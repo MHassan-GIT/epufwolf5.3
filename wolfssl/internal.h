@@ -24,6 +24,10 @@
 #ifndef WOLFSSL_INT_H
 #define WOLFSSL_INT_H
 
+#ifndef HAVE_EPUF
+#define HAVE_EPUF
+#endif
+
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/ssl.h>
 #ifdef HAVE_CRL
@@ -2271,6 +2275,7 @@ typedef enum {
 #endif
     TLSX_MAX_FRAGMENT_LENGTH        = 0x0001,
     TLSX_TRUSTED_CA_KEYS            = 0x0003,
+    TLSX_EPUF                       = 0x0002, /*encrypted Physically Clonable Function */
     TLSX_TRUNCATED_HMAC             = 0x0004,
     TLSX_STATUS_REQUEST             = 0x0005, /* a.k.a. OCSP stapling   */
     TLSX_SUPPORTED_GROUPS           = 0x000a, /* a.k.a. Supported Curves */
@@ -2348,6 +2353,7 @@ WOLFSSL_LOCAL int   TLSX_Parse(WOLFSSL* ssl, const byte* input, word16 length,
                                byte msgType, Suites *suites);
 
 #elif defined(HAVE_SNI)                           \
+   || defined(HAVE_EPUF)                          \
    || defined(HAVE_MAX_FRAGMENT)                  \
    || defined(HAVE_TRUSTED_CA)                    \
    || defined(HAVE_TRUNCATED_HMAC)                \
@@ -2519,6 +2525,42 @@ WOLFSSL_LOCAL int TLSX_SupportedCurve_Preferred(WOLFSSL* ssl,
                                                             int checkSupported);
 
 #endif /* HAVE_SUPPORTED_CURVES */
+
+/**USE ENCRYPTED PHYSICALLY UNCLONABLE FUNCTION TLS1.3*/
+
+
+
+#ifdef HAVE_EPUF
+
+typedef struct EPUF {
+
+word16              ClientIDLen;                // Length of Client ID 
+byte*               ClientIDShare;              // Client ID 
+byte*               ChallengeShare;              // Challange Sent by server based on Client ID
+byte*               ChallengeResponse;           // Clients Response to Server issued challenge
+byte*               ServerID;                    // Server ID 
+byte*               PairBasedKey;                // Generated Key Response using PBC
+word16              PairBasedKeySz;              // Size of PAir Based Key 
+struct EPUF*        next;                       //List pointer
+} EPUF;
+
+//need to doublecheck these functions match actual
+
+//WOLFSSL_LOCAL word16 TLSX_EPUF_Write(EPUF* list, byte* output, byte msgtype);
+
+//WOLFSSL_LOCAL word16 TLSX_EPUF_GetSize (EPUF* list, byte msgtype);
+
+/* For pbc.. 
+typedef struct pkg_param_st {
+    pairing_t pairing;
+    element_t ChallengeResponse;
+    element_t ChallengeShare;
+} EPUF_PARAM;
+*/
+
+#endif //FOR EPUF
+
+
 
 /** Renegotiation Indication - RFC 5746 */
 #if defined(HAVE_SECURE_RENEGOTIATION) \

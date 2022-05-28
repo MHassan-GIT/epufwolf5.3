@@ -2253,6 +2253,12 @@ int TLSX_SNI_GetFromBuffer(const byte* clientHello, word32 helloSz,
 
     if (offset + len32 > helloSz)
         return BUFFER_ERROR;
+        
+  /* ePUF sending clientId */
+
+   // char teststringy = 'T';
+    //int MoeRet = TLSX_Push(&ssl->extensions, TLSX_SERVER_NAME, &teststringy, &ssl->heap);
+    //offset += sizeOf(char);
 
     /* client hello */
     offset += VERSION_SZ + RAN_LEN; /* version, random */
@@ -3723,6 +3729,119 @@ int TLSX_UseCertificateStatusRequestV2(TLSX** extensions, byte status_type,
 
 #endif /* HAVE_CERTIFICATE_STATUS_REQUEST_V2 */
 
+/******************************************************************************/
+/* Encrypted Physically Unclonable Function TLS1.3                                                */
+/******************************************************************************/
+#ifdef HAVE_EPUF
+
+WOLFSSL_LOCAL word16 TLSX_EPUF_Write(EPUF* list, byte* output, byte msgtype);
+
+WOLFSSL_LOCAL word16 TLSX_EPUF_Get_Size (EPUF* list, byte msgtype);
+
+word16 TLSX_EPUF_Get_Size(EPUF* list, byte msgtype){
+
+
+    EPUF* epuf;
+    word16 Length= 0;
+    byte isRequest = (msgtype == server_hello || msgtype == client_hello);
+
+    if (msgtype == client_hello)
+        Length  = OPAQUE16_LEN;
+    else if (msgtype == server_hello)
+        Length  = 2*OPAQUE16_LEN;
+
+    if (isRequest)
+        while ((epuf = list)) {
+            list = epuf->next;
+            Length += OPAQUE16_LEN;
+
+        }
+    else{
+        Length = -1; // Not a server hello or client hello
+    }
+    return Length;
+
+    }
+
+
+
+word16 TLSX_EPUF_Write(EPUF* list, byte* output, byte msgtype){;
+
+    EPUF* epuf;
+    word16 offset = 0;
+    byte isRequest = (msgtype == server_hello || msgtype == client_hello);
+
+    offset = 2*OPAQUE16_LEN;
+    if (msgtype == client_hello) {
+        c16toa(1,output+OPAQUE16_LEN);
+        while ((epuf = list) != NULL) {
+            c16toa((word16)*list->ClientIDShare, output + offset);
+            offset += OPAQUE16_LEN;
+            list = list->next; 
+        }
+    }
+    else if (msgtype == server_hello) {
+        c16toa(2,output+OPAQUE16_LEN);
+        while((epuf = list) != NULL) {
+            c16toa((word16)*list->ChallengeShare, output + offset);
+            offset += OPAQUE16_LEN;
+            list = list->next;
+        }
+    }    
+    if (isRequest)
+        c16toa(offset - OPAQUE16_LEN, output);
+
+    return offset; 
+}
+
+/*int TLSX_EPUF_Parse(WOLFSSL* ssl, const byte* input,
+                                   word16 length, byte msgType) */
+
+
+/* For pbc...
+TLSX_EPUF_Use(WOLFSSL* ssl, const byte* identity, word16 len,
+                          word32 age, byte hmac, byte cipherSuite0,
+                          byte cipherSuite, byte resumption,
+                          PreSharedKey **preSharedKey)
+	pairing_init_set_buf(ssl->epuf.pairing, param, count);
+		//Is symmetric pairing?
+		if(!pairing_is_symmetric(ssl->epuf.pairing))
+		{
+			printf("SSL_CTX_use_PKGParam_file_ERROR: Not symmetric pairing!\n");
+			return WOLFSSL_FAILURE;
+		}
+
+		element_init_G1(ssl->pkg.P, ssl->epuf.pairing);
+		element_init_G1(ssl->pkg.Ppub, ssl->epuf.pairing);
+		element_set_str(ssl->pkg.P, P_data, 10);
+		element_set_str(ssl->pkg.Ppub, Ppub_data, 10);
+
+		fclose(fp);
+		free(param);
+		free(P_data);
+		free(Ppub_data);
+		fdata = NULL;
+
+		return WOLFSSL_SUCCESS;
+
+*/
+
+/*
+#define EPUF_FREE_ALL  TLSX_EPUF_FreeAll
+#define EPUF_GET_SIZE  TLSX_EPUF_GetSize
+#define EPUF_WRITE     TLSX_EPUF_Write
+#define EPUF_PARSE     TLSX_EPUF_Parse
+
+#else
+
+#define EPUF_FREE_ALL(a, b)
+#define EPUF_GET_SIZE(a, b)    0
+#define EPUF_WRITE(a, b, c)    0
+#define EPUF_PARSE(a, b, c, d) 0
+*/
+#endif /* WOLFSSL_TLS13 */
+
+//#endif // FOREPUF
 /******************************************************************************/
 /* Supported Elliptic Curves                                                  */
 /******************************************************************************/
@@ -10169,6 +10288,10 @@ void TLSX_FreeAll(TLSX* list, void* heap)
                 /* Nothing to do. */
                 break;
 
+            case TLSX_EPUF:
+
+            	break;
+
             case TLSX_SUPPORTED_GROUPS:
                 EC_FREE_ALL((SupportedCurve*)extension->data, heap);
                 break;
@@ -10303,6 +10426,10 @@ static int TLSX_GetSize(TLSX* list, byte* semaphore, byte msgType,
                 if (isRequest)
                     length += TCA_GET_SIZE((TCA*)extension->data);
                 break;
+
+            case TLSX_EPUF:
+            	length += TLSX_EPUF_Get_Size((EPUF*)extension->data, msgType);
+            	break;
 
             case TLSX_MAX_FRAGMENT_LENGTH:
                 length += MFL_GET_SIZE(extension->data);
@@ -10472,6 +10599,12 @@ static int TLSX_Write(TLSX* list, byte* output, byte* semaphore,
                 WOLFSSL_MSG("Extended Master Secret");
                 /* always empty. */
                 break;
+
+            case TLSX_EPUF:
+            	WOLFSSL_MSG("ePUFTLS extension to write");
+                offset += TLSX_EPUF_Write((EPUF*)extension->data,
+                                    output + offset, msgType);
+            	break;
 
             case TLSX_TRUNCATED_HMAC:
                 WOLFSSL_MSG("Truncated HMAC extension to write");
@@ -10939,7 +11072,11 @@ int TLSX_PopulateExtensions(WOLFSSL* ssl, byte isServer)
     TLSX* extension = NULL;
     word16 namedGroup = WOLFSSL_NAMED_GROUP_INVALID;
 #endif
+/* ePUF sending clientId */
 
+    //char teststringy = 'T';
+    //ret = TLSX_Push(&ssl->extensions, TLSX_ePUFTLS, &teststringy, &ssl->heap);
+    
     /* server will add extension depending on what is parsed from client */
     if (!isServer) {
 #if defined(HAVE_ENCRYPT_THEN_MAC) && !defined(WOLFSSL_AEAD_ONLY)
